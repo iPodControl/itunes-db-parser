@@ -1,3 +1,4 @@
+// src/parsers/itunesdb_parser.rs
 use std::fmt::Write;
 use std::fs::File;
 use std::io;
@@ -8,8 +9,216 @@ use crate::itunesdb;
 use crate::helpers::helpers;
 use crate::helpers::itunesdb_helpers;
 
+use crate::itunesdb::{IpodDeviceInfo, IpodModel};
+
+pub fn extract_device_info(itunesdb_file_as_bytes: &[u8]) -> IpodDeviceInfo {
+    let mut device_info = IpodDeviceInfo::default();
+    
+    // Get database version
+    let db_version = helpers::get_slice_as_le_u32(
+        0,
+        itunesdb_file_as_bytes, 
+        itunesdb_constants::DATABASE_OBJECT_VERSION_NUMBER_OFFSET,
+        itunesdb_constants::DATABASE_OBJECT_VERSION_NUMBER_LEN
+    );
+
+    // Get hardware capabilities/features to help identify model
+    let has_artwork = check_for_artwork_support(itunesdb_file_as_bytes);
+    let has_photos = check_for_photo_support(itunesdb_file_as_bytes);
+    let device_capacity = estimate_device_capacity(itunesdb_file_as_bytes);
+    
+    // Determine model, generation, name and release year based on database version and capabilities
+    let (model, generation, name, release_year) = match db_version {
+        // iTunes 4.2
+        0x09 => {
+            if device_capacity <= 4 {
+                (IpodModel::Mini("1st Generation".to_string()), 
+                 "1st Generation".to_string(),
+                 format!("iPod Mini {}GB (1st Gen)", device_capacity),
+                 Some(2004))
+            } else {
+                (IpodModel::Classic("3rd Generation".to_string()),
+                 "3rd Generation".to_string(),
+                 format!("iPod Classic {}GB (3rd Gen)", device_capacity), 
+                 Some(2003))
+            }
+        },
+
+        // iTunes 4.5-4.8
+        0x0A..=0x0C => {
+            if device_capacity <= 6 {
+                (IpodModel::Mini("2nd Generation".to_string()),
+                 "2nd Generation".to_string(),
+                 format!("iPod Mini {}GB (2nd Gen)", device_capacity),
+                 Some(2005))
+            } else {
+                (IpodModel::Classic("4th Generation".to_string()),
+                 "4th Generation".to_string(),
+                 format!("iPod Classic {}GB (4th Gen)", device_capacity),
+                 Some(2004))
+            }
+        },
+
+        // iTunes 4.9-5.0
+        0x0D..=0x0E => {
+            if has_photos && device_capacity <= 4 {
+                (IpodModel::Nano("1st Generation".to_string()),
+                 "1st Generation".to_string(),
+                 format!("iPod Nano {}GB (1st Gen)", device_capacity),
+                 Some(2005))
+            } else if has_photos {
+                (IpodModel::Classic("5th Generation (Video)".to_string()),
+                 "5th Generation".to_string(),
+                 format!("iPod Classic {}GB Video (5th Gen)", device_capacity),
+                 Some(2005))
+            } else {
+                (IpodModel::Classic("Color/Photo".to_string()),
+                 "4th Generation".to_string(),
+                 format!("iPod Classic {}GB Color/Photo (4th Gen)", device_capacity),
+                 Some(2004))
+            }
+        },
+
+        // iTunes 6.0-6.0.5
+        0x0F..=0x12 => {
+            if device_capacity <= 8 {
+                (IpodModel::Nano("2nd Generation".to_string()),
+                 "2nd Generation".to_string(),
+                 format!("iPod Nano {}GB (2nd Gen)", device_capacity),
+                 Some(2006))
+            } else {
+                (IpodModel::Classic("5th Generation Enhanced".to_string()),
+                 "5th Generation".to_string(),
+                 format!("iPod Classic {}GB Enhanced (5th Gen)", device_capacity),
+                 Some(2006))
+            }
+        },
+
+        // iTunes 7.0-7.2
+        0x13..=0x15 => {
+            if device_capacity <= 8 {
+                (IpodModel::Nano("3rd Generation".to_string()),
+                 "3rd Generation".to_string(),
+                 format!("iPod Nano {}GB (3rd Gen)", device_capacity),
+                 Some(2007))
+            } else {
+                (IpodModel::Classic("6th Generation".to_string()),
+                 "6th Generation".to_string(),
+                 format!("iPod Classic {}GB (6th Gen)", device_capacity),
+                 Some(2007))
+            }
+        },
+
+        // iTunes 7.3-7.4
+        0x17..=0x19 => {
+            if device_capacity <= 16 {
+                (IpodModel::Nano("4th Generation".to_string()),
+                 "4th Generation".to_string(),
+                 format!("iPod Nano {}GB (4th Gen)", device_capacity),
+                 Some(2008))
+            } else {
+                (IpodModel::Classic("6th Generation (Late 2008)".to_string()),
+                 "6th Generation".to_string(),
+                 format!("iPod Classic {}GB (Late 2008)", device_capacity),
+                 Some(2008))
+            }
+        },
+
+        _ => (IpodModel::Unknown,
+              "Unknown".to_string(),
+              format!("Unknown iPod ({}GB)", device_capacity),
+              None)
+    };
+    
+    device_info.model = model;
+    device_info.generation = generation;
+    device_info.name = name;
+    device_info.release_year = release_year;
+
+    device_info
+}
+
+// Helper functions to check device capabilities
+fn check_for_artwork_support(itunesdb_file_as_bytes: &[u8]) -> bool {
+    // Check for artwork flag in mhit entries
+    // Look through file for track artwork flags
+    let mut idx = 0;
+    while idx < itunesdb_file_as_bytes.len() - itunesdb_constants::DEFAULT_SUBSTRUCTURE_SIZE {
+        if &itunesdb_file_as_bytes[idx..idx + itunesdb_constants::DEFAULT_SUBSTRUCTURE_SIZE] == itunesdb_constants::TRACK_ITEM_KEY.as_bytes() {
+            // Check artwork flag
+            let artwork_flag = &itunesdb_file_as_bytes[
+                idx + itunesdb_constants::TRACK_ITEM_TRACK_HAS_ARTWORK_SETTING_OFFSET..
+                idx + itunesdb_constants::TRACK_ITEM_TRACK_HAS_ARTWORK_SETTING_OFFSET + 
+                itunesdb_constants::TRACK_ITEM_TRACK_HAS_ARTWORK_SETTING_LEN
+            ];
+            if artwork_flag[0] == 0x01 {
+                return true;
+            }
+        }
+        idx += 1;
+    }
+    false
+}
+
+fn check_for_photo_support(itunesdb_file_as_bytes: &[u8]) -> bool {
+    // Look for photo database structures
+    let mut idx = 0;
+    while idx < itunesdb_file_as_bytes.len() - itunesdb_constants::DEFAULT_SUBSTRUCTURE_SIZE {
+        // Look for mhsd type 3 which indicates photo support
+        if &itunesdb_file_as_bytes[idx..idx + itunesdb_constants::DEFAULT_SUBSTRUCTURE_SIZE] == itunesdb_constants::DATASET_KEY.as_bytes() {
+            let dataset_type = helpers::get_slice_as_le_u32(
+                idx,
+                itunesdb_file_as_bytes,
+                itunesdb_constants::DATASET_TYPE_OFFSET,
+                itunesdb_constants::DATASET_TYPE_LEN
+            );
+            if dataset_type == 3 {
+                return true;
+            }
+        }
+        idx += 1;
+    }
+    false
+}
+
+fn estimate_device_capacity(itunesdb_file_as_bytes: &[u8]) -> u32 {
+    // Estimate capacity by looking at total size of all tracks
+    let mut total_size: u64 = 0;
+    let mut idx = 0;
+    
+    while idx < itunesdb_file_as_bytes.len() - itunesdb_constants::DEFAULT_SUBSTRUCTURE_SIZE {
+        if &itunesdb_file_as_bytes[idx..idx + itunesdb_constants::DEFAULT_SUBSTRUCTURE_SIZE] == itunesdb_constants::TRACK_ITEM_KEY.as_bytes() {
+            let track_size = helpers::get_slice_as_le_u32(
+                idx,
+                itunesdb_file_as_bytes,
+                itunesdb_constants::TRACK_ITEM_TRACK_FILE_SIZE_BYTES_OFFSET,
+                itunesdb_constants::TRACK_ITEM_TRACK_FILE_SIZE_BYTES_LEN
+            );
+            total_size += track_size as u64;
+        }
+        idx += 1;
+    }
+    
+    // Convert total bytes to GB and round up
+    // Using 1GB = 1,000,000,000 bytes (marketing calculation)
+    let gb = (total_size as f64 / 1_000_000_000.0).ceil() as u32;
+    
+    // Return estimated capacity based on total content size
+    // Typically devices were sold in 2/4/8/16/32/64/128 GB capacities
+    match gb {
+        0..=2 => 2,
+        3..=4 => 4,
+        5..=8 => 8,
+        9..=16 => 16,
+        17..=32 => 32,
+        33..=64 => 64,
+        _ => 128
+    }
+}
+
 
 pub fn parse_itunesdb_file(itunesdb_file_as_bytes : Vec<u8>) {
+    let device_info = extract_device_info(&itunesdb_file_as_bytes);
 
     let mut music_csv_writer = helpers::init_csv_writer("music.csv");
     let mut podcast_csv_writer = helpers::init_csv_writer("podcasts.csv");
@@ -19,6 +228,17 @@ pub fn parse_itunesdb_file(itunesdb_file_as_bytes : Vec<u8>) {
 
     let mut curr_song = itunesdb::Song::default();
     let mut curr_podcast = itunesdb::Podcast::default();
+
+    // Set device info on initial objects
+    curr_song.ipod_model = device_info.model.clone();
+    curr_song.ipod_generation = device_info.generation.clone();
+    curr_song.ipod_name = device_info.name.clone();
+    curr_song.ipod_release_year = device_info.release_year;
+
+    curr_podcast.ipod_model = device_info.model.clone();
+    curr_podcast.ipod_generation = device_info.generation.clone(); 
+    curr_podcast.ipod_name = device_info.name.clone();
+    curr_podcast.ipod_release_year = device_info.release_year;
 
     let mut curr_media_type = itunesdb::HandleableMediaType::UNKNOWN;
 
@@ -787,6 +1007,11 @@ pub fn parse_itunesdb_file(itunesdb_file_as_bytes : Vec<u8>) {
                     if curr_song.are_enough_fields_valid() {
                         songs_found.push(curr_song);
                         curr_song = itunesdb::Song::default();
+                        // Set device info on new song
+                        curr_song.ipod_model = device_info.model.clone();
+                        curr_song.ipod_generation = device_info.generation.clone();
+                        curr_song.ipod_name = device_info.name.clone();
+                        curr_song.ipod_release_year = device_info.release_year;
 
                     }
                 }
@@ -809,6 +1034,11 @@ pub fn parse_itunesdb_file(itunesdb_file_as_bytes : Vec<u8>) {
 
                         podcasts_found.push(curr_podcast);
                         curr_podcast = itunesdb::Podcast::default();
+                        // Set device info on new podcast
+                        curr_podcast.ipod_model = device_info.model.clone();
+                        curr_podcast.ipod_generation = device_info.generation.clone();
+                        curr_podcast.ipod_name = device_info.name.clone();
+                        curr_podcast.ipod_release_year = device_info.release_year; 
                     }
                 }
             }
@@ -844,6 +1074,7 @@ pub fn parse_itunesdb_file(itunesdb_file_as_bytes : Vec<u8>) {
 
     // Add JSON output @joshkenney
     if !songs_found.is_empty() {
+        // Make sure Song struct has #[derive(Serialize)] attribute
         let songs_json = serde_json::to_string_pretty(&songs_found)
             .expect("Error serializing songs to JSON");
         
@@ -852,20 +1083,21 @@ pub fn parse_itunesdb_file(itunesdb_file_as_bytes : Vec<u8>) {
         
         io::Write::write_all(&mut songs_json_file, songs_json.as_bytes())
             .expect("Error writing songs JSON file");
-            
+                
         println!("Created songs.json with {} songs", songs_found.len());
     }
-
+    
     if !podcasts_found.is_empty() {
+        // Make sure Podcast struct has #[derive(Serialize)] attribute
         let podcasts_json = serde_json::to_string_pretty(&podcasts_found)
             .expect("Error serializing podcasts to JSON");
-            
+                
         let mut podcasts_json_file = File::create("podcasts.json")
             .expect("Error creating podcasts JSON file");
         
         io::Write::write_all(&mut podcasts_json_file, podcasts_json.as_bytes())
             .expect("Error writing podcasts JSON file");
-            
+                
         println!("Created podcasts.json with {} podcasts", podcasts_found.len());
     }
 
@@ -875,7 +1107,12 @@ pub fn parse_itunesdb_file(itunesdb_file_as_bytes : Vec<u8>) {
         "Genre",
         "Subtitle",
         "Description",
-        "File Type"
+        "File Type",
+        // Device info
+        "iPod Model",
+        "iPod Generation",
+        "iPod Name",
+        "iPod Release Year",
     ]).expect("Error can't create CSV file headers for podcast file");
 
     for episode in podcasts_found.iter() {
@@ -885,7 +1122,12 @@ pub fn parse_itunesdb_file(itunesdb_file_as_bytes : Vec<u8>) {
             episode.podcast_genre.to_string(),
             episode.podcast_subtitle.to_string(),
             episode.podcast_description.to_string().replace("\n", ""),
-            episode.podcast_file_type.to_string()
+            episode.podcast_file_type.to_string(),
+            // Device info
+            episode.ipod_model.to_string(),
+            episode.ipod_generation.to_string(),
+            episode.ipod_name.to_string(),
+            episode.ipod_release_year.map_or("Unknown".to_string(), |y| y.to_string()),
         ]).expect("Can't write row to podcast CSV file");
     }
 
@@ -910,6 +1152,11 @@ pub fn parse_itunesdb_file(itunesdb_file_as_bytes : Vec<u8>) {
             "Added to library on (epoch)",
             "Composer",
             "Comment",
+            // Device info
+            "iPod Model",
+            "iPod Generation", 
+            "iPod Name",
+            "iPod Release Year",
         ])
         .expect("Can't create CSV file headers for music file");
 
@@ -939,6 +1186,11 @@ pub fn parse_itunesdb_file(itunesdb_file_as_bytes : Vec<u8>) {
                 song.song_added_to_library_epoch.to_string(),
                 song.song_composer.to_string(),
                 song.song_comment.to_string(),
+                // Device info
+                song.ipod_model.to_string(),
+                song.ipod_generation.to_string(),
+                song.ipod_name.to_string(),
+                song.ipod_release_year.map_or("Unknown".to_string(), |y| y.to_string()),
             ])
             .expect("Can't write row to CSV");
     }

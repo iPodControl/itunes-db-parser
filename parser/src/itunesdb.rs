@@ -13,6 +13,48 @@
 
  use serde::Serialize;
 
+ #[derive(Debug, Clone, Serialize)]
+ pub enum IpodModel {
+     Classic(String),
+     Mini(String),    
+     Nano(String),    
+     Shuffle(String), 
+     Touch(String),   
+     Unknown
+ }
+ 
+ #[derive(Debug, Clone, Serialize)]
+ pub struct IpodDeviceInfo {
+     pub model: IpodModel,
+     pub generation: String,
+     pub name: String,
+     pub release_year: Option<u16>
+ }
+ 
+ impl Default for IpodDeviceInfo {
+     fn default() -> Self {
+         IpodDeviceInfo {
+             model: IpodModel::Unknown,
+             generation: String::from("Unknown"),
+             name: String::from("Unknown"),
+             release_year: None
+         }
+     }
+ }
+ 
+ impl std::fmt::Display for IpodModel {
+     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+         match self {
+             IpodModel::Classic(gen) => write!(f, "iPod Classic {}", gen),
+             IpodModel::Mini(gen) => write!(f, "iPod Mini {}", gen),
+             IpodModel::Nano(gen) => write!(f, "iPod Nano {}", gen),
+             IpodModel::Shuffle(gen) => write!(f, "iPod Shuffle {}", gen),
+             IpodModel::Touch(gen) => write!(f, "iPod Touch {}", gen),
+             IpodModel::Unknown => write!(f, "Unknown iPod")
+         }
+     }
+ }
+
  
  #[derive(Serialize)]
   pub struct Podcast {
@@ -21,7 +63,11 @@
     pub podcast_genre : String,
     pub podcast_file_type : String,
     pub podcast_subtitle : String,
-    pub podcast_description : String
+    pub podcast_description : String,
+    pub ipod_model: IpodModel,
+    pub ipod_generation: String,
+    pub ipod_name: String,
+    pub ipod_release_year: Option<u16>
  }
 
  impl Default for Podcast {
@@ -34,7 +80,11 @@
             podcast_genre: "".to_string(),
             podcast_file_type: "".to_string(),
             podcast_subtitle: "".to_string(),
-            podcast_description: "".to_string()
+            podcast_description: "".to_string(),
+            ipod_model: IpodModel::Unknown,
+            ipod_generation: String::from("Unknown"),
+            ipod_name: String::from("Unknown"),
+            ipod_release_year: None,
         };
     }
  }
@@ -62,6 +112,10 @@
     /// As far as I can tell from looking at the output, this field
     /// is always the last one to get populated
     pub song_filename: String,
+    pub ipod_model: IpodModel,
+    pub ipod_generation: String,
+    pub ipod_name: String,
+    pub ipod_release_year: Option<u16>
 }
 
 impl Default for Song {
@@ -91,6 +145,10 @@ impl Default for Song {
             song_genre: "".to_string(),
             song_comment: "".to_string(),
             song_filename: "".to_string(),
+            ipod_model: IpodModel::Unknown,
+            ipod_generation: String::from("Unknown"),
+            ipod_name: String::from("Unknown"),
+            ipod_release_year: None,
         };
     }
 }

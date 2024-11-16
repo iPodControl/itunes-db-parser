@@ -29,7 +29,7 @@ pub const DEFAULT_SUBSTRUCTURE_SIZE: usize = 4;
     pub const DATASET_KEY: &str = "mhsd";
 
     pub const DATASET_TYPE_OFFSET: usize = 12;
-    pub const DATASET_TYPE_LEN: usize = 12;
+    pub const DATASET_TYPE_LEN: usize = 4;
 
     pub const DATASET_LAST_OFFSET: usize = 16;
 
